@@ -167,6 +167,16 @@ function chartCard(stock, kind) {
         </section>`;
 }
 
+/**
+ * 내용이 바뀐 경우에만 다시 그려요. 자동 갱신 때 시세가 그대로면 카드(버튼 포함)를 바꾸지 않아서,
+ * 그 순간 누르던 버튼의 누름이 사라지지 않아요.
+ */
+function put(el, html) {
+    if (el.__html === html) return;
+    el.__html = html;
+    el.innerHTML = html;
+}
+
 /* ---------- 화면 ---------- */
 
 /** 시세 상태 (모듈 변수라 화면을 떠났다 와도 남아요) { code, status, data, time, error } */
@@ -210,22 +220,24 @@ export default {
             if (!view.isConnected) return;
             const q = quote?.code === stock?.code ? quote : null;
             if (!stock) {
-                slot('price').innerHTML = emptyCard();
-                ['value', 'chart', 'links'].forEach(n => { slot(n).innerHTML = ''; });
+                put(slot('price'), emptyCard());
+                ['value', 'links'].forEach(n => put(slot(n), ''));
+                slot('chart').innerHTML = '';   // 차트는 아래에서 종목·종류로 따로 관리해서 put을 쓰지 않아요
+                delete slot('chart').dataset.key;
                 return;
             }
             if (!q?.data) {
-                slot('price').innerHTML = waitingCard(stock, q);
-                slot('value').innerHTML = '';
-                slot('links').innerHTML = '';
+                put(slot('price'), waitingCard(stock, q));
+                put(slot('value'), '');
+                put(slot('links'), '');
             } else if (us) {
-                slot('price').innerHTML = usPriceCard(stock, q);
-                slot('value').innerHTML = usValueCard(stock, q.data);
-                slot('links').innerHTML = linksCard(q.data, usd, '해외 주식');
+                put(slot('price'), usPriceCard(stock, q));
+                put(slot('value'), usValueCard(stock, q.data));
+                put(slot('links'), linksCard(q.data, usd, '해외 주식'));
             } else {
-                slot('price').innerHTML = priceCard(stock, q);
-                slot('value').innerHTML = valueCard(stock, q.data);
-                slot('links').innerHTML = linksCard(q.data, (n) => `${won(n)}원`, '국내 주식');
+                put(slot('price'), priceCard(stock, q));
+                put(slot('value'), valueCard(stock, q.data));
+                put(slot('links'), linksCard(q.data, (n) => `${won(n)}원`, '국내 주식'));
             }
             if (us) {
                 // 해외 차트: 트레이딩뷰 위젯은 종목이 바뀌거나 연결될 때만 새로 넣어요 (다시 넣으면 새로 로딩돼서)

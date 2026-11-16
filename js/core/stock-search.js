@@ -146,6 +146,13 @@ export function createStockSearch(container, { kind = 'kr', onPick, autofocus = 
         else input.removeAttribute('aria-activedescendant');
     }
 
+    /**
+     * 기다리는 동안 상황이 바뀌었으면 목록을 그리지 않아요.
+     * 연결이 느리면 목록 파일·트레이딩뷰 검색이 늦게 도착하는데, 그사이 사용자가 아래 입력칸으로 옮겨 갔으면
+     * 늦게 온 목록이 입력칸을 덮어서 칸을 누르면 종목이 골라지는 문제가 있었어요.
+     */
+    const stale = (query) => input.value !== query || document.activeElement !== input;
+
     async function update() {
         const query = input.value;
         if (!query.trim()) {
@@ -155,17 +162,18 @@ export function createStockSearch(container, { kind = 'kr', onPick, autofocus = 
         }
         try {
             const list = await loadStockList(kind);
-            if (input.value !== query) return;   // 기다리는 동안 글자가 바뀌었으면 버려요
+            if (stale(query)) return;   // 기다리는 동안 글자가 바뀌었거나 검색칸을 벗어났으면 버려요
             let found = searchStocks(list, query);
             // 미국: 목록에 없으면 트레이딩뷰에서 한 번 더 (코드·영문만)
             if (!found.length && kind === 'us') {
                 listEl.innerHTML = '<li class="ss-empty">목록에 없어서 트레이딩뷰에서 찾는 중…</li>';
                 found = (await searchUs(query).catch(() => [])).map(s => ({ ...s, kind: 'us' }));
-                if (input.value !== query) return;
+                if (stale(query)) return;
             }
             render(found, query);
             if (!found.length) listEl.innerHTML = '<li class="ss-empty">찾는 종목이 없어요</li>';
         } catch {
+            if (stale(query)) return;
             listEl.innerHTML = '<li class="ss-empty is-error">종목 목록을 불러오지 못했어요</li>';
         }
     }
@@ -201,6 +209,13 @@ export function createStockSearch(container, { kind = 'kr', onPick, autofocus = 
             render([], '');
         }
     });
+    // 검색 영역 바깥을 누르면 열린 목록을 닫아요 (blur가 안 오는 경우까지 대비. 화면을 떠나면 스스로 해제)
+    const closeOutside = (e) => {
+        if (!container.isConnected) return document.removeEventListener('pointerdown', closeOutside, true);
+        if (!container.contains(e.target)) render([], '');
+    };
+    document.addEventListener('pointerdown', closeOutside, true);
+
     // mousedown: 클릭으로 입력칸 포커스가 빠지기 전에 골라요
     listEl.addEventListener('mousedown', (e) => {
         const li = e.target.closest('.ss-item');

@@ -10,7 +10,8 @@
  *   다른 탭에 갔다 돌아옴 ... 확인 요청 1번
  *
  * 브라우저의 "연결됨"은 와이파이에 붙었다는 뜻일 뿐이에요. 공유기 인터넷이 끊겨도 "연결됨"이라서,
- * 확인 요청이 실패하면 오프라인으로 보고, 이 상태일 때만 15초 → 30초 → 60초 간격으로 다시 확인해요.
+ * 확인 요청이 두 번 연속 실패하면 오프라인으로 보고, 이 상태일 때만 15초 → 30초 → 60초 간격으로 다시 확인해요.
+ * (연결이 불안정한 휴대폰에서 한 번 삐끗할 때마다 오프라인으로 바뀌지 않게, 한 번 실패하면 3초 뒤 한 번 더 확인)
  * (이때는 브라우저가 알려줄 일이 없어서요. 연결되면 멈추고, 탭이 숨어 있으면 쉬어요)
  *
  * 확인 요청은 우리 사이트(index.html)에 보내요. 내용은 받지 않고(HEAD) 답이 오는지만 봐요.
@@ -29,7 +30,11 @@ let checking = null;
 
 const RETRY_MIN = 15000;
 const RETRY_MAX = 60000;
-const PING_TIMEOUT = 5000;
+const PING_TIMEOUT = 8000;          // 휴대폰 느린 연결에서도 기다려 줄 시간
+const FAILS_TO_OFFLINE = 2;         // 확인 요청이 이만큼 연속 실패해야 오프라인으로 (한 번 삐끗한 걸로 바꾸지 않게)
+const RECHECK_SOON = 3000;          // 한 번 실패했을 때 다시 확인하기까지
+/** 확인 요청 연속 실패 횟수 */
+let failures = 0;
 
 /** 지금 인터넷이 되는지 */
 export const isOnline = () => online;
@@ -88,14 +93,23 @@ export function checkNow() {
         return Promise.resolve(false);
     }
     checking ??= ping().then((ok) => {
-        setOnline(ok);
         if (ok) {
+            failures = 0;
+            setOnline(true);
             stopRetry();
             retryDelay = RETRY_MIN;
-        } else {
-            scheduleRetry();
+            return true;
         }
-        return ok;
+        failures += 1;
+        if (failures >= FAILS_TO_OFFLINE) {
+            setOnline(false);
+            scheduleRetry();
+            return false;
+        }
+        // 한 번 실패: 연결이 잠깐 삐끗했을 수 있어서 바로 오프라인으로 바꾸지 않고 조금 뒤 한 번 더 확인
+        stopRetry();
+        retryTimer = setTimeout(checkNow, RECHECK_SOON);
+        return online;
     }).finally(() => { checking = null; });
     return checking;
 }

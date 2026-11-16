@@ -274,6 +274,16 @@ function coinCard() {
         </section>`;
 }
 
+/**
+ * 내용이 바뀐 경우에만 다시 그려요. 자동 갱신 때 시세가 그대로면 카드(버튼 포함)를 바꾸지 않아서,
+ * 그 순간 누르던 버튼의 누름이 사라지지 않아요.
+ */
+function put(el, html) {
+    if (el.__html === html) return;
+    el.__html = html;
+    el.innerHTML = html;
+}
+
 /* ---------- 화면 ---------- */
 
 export default {
@@ -315,7 +325,7 @@ export default {
         const draw = () => {
             if (!view.isConnected) return;   // 기다리는 동안 다른 화면으로 갔으면 그리지 않아요
             Object.entries(slots).forEach(([id, card]) => {
-                view.querySelector(`[data-slot="${id}"]`).innerHTML = card();
+                put(view.querySelector(`[data-slot="${id}"]`), card());
             });
             const loading = Object.values(state).some(s => s.status === 'loading');
             const online = isOnline();

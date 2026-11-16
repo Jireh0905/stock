@@ -249,6 +249,8 @@ body.drawer-open .scrim { opacity: 1; visibility: visible; }
     container-type: inline-size;   /* 아래 @container가 "이 영역의 너비"를 기준으로 판단 */
 }
 .page { animation: page-in .2s ease; }   /* 화면이 바뀔 때 살짝 떠오르는 효과 */
+/* 기능 화면 묶음은 안쪽 카드의 아래 여백을 늘 품고 있게 (core/hold-height.js가 높이를 잡을 때 여백만큼 흔들리지 않게) */
+.page > div { display: flow-root; }
 @keyframes page-in { from { opacity: 0; transform: translateY(6px); } }
 
 /* =========================================================
@@ -1208,6 +1210,10 @@ body.sheet-open .sheet { transform: translate(-50%, 0); visibility: visible; }
     z-index: 60;
 }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
+/* 입력하는 동안(휴대폰 키보드가 올라와 있을 때)은 알림을 위쪽(상단 바 아래)에 띄워요.
+   아래에 띄우면 키보드 바로 위, 지금 입력하는 칸 자리를 가릴 수 있어서 (app.js가 body에 data-typing을 붙여줌) */
+body[data-typing] .toast { top: 64px; bottom: auto; transform: translate(-50%, -20px); }
+body[data-typing] .toast.show { transform: translate(-50%, 0); }
 
 /* ---------- 해외: 기준 환율 · 원화로 넣기 · [$ | 원] 보기 (core/market.js, core/money-input.js) ---------- */
 /* 국내/해외 버튼 아래 "기준 환율 [1,300 원] (오늘 환율) 11/12 기준" */
@@ -1221,7 +1227,8 @@ body.sheet-open .sheet { transform: translate(-50%, 0); visibility: visible; }
 }
 .fx-line-label { flex-shrink: 0; font-weight: 600; color: var(--text-2); }
 .fx-line-input { flex: 0 1 120px; min-width: 96px; }
-.fx-line-input input { height: 36px; padding: 0 30px 0 10px; font-size: 0.9375rem; }
+/* 글자 16px: 아이폰 사파리는 16px보다 작은 칸을 누르면 화면을 확대해요 */
+.fx-line-input input { height: 36px; padding: 0 30px 0 10px; font-size: 1rem; }
 .fx-line-input .unit { right: 10px; font-size: 0.8125rem; }
 .fx-line .mini-btn { margin-left: 0; padding: 4px 10px; font-size: 0.75rem; }
 .fx-line .mini-btn:disabled { color: var(--text-3); cursor: default; }
@@ -1255,12 +1262,13 @@ body.sheet-open .sheet { transform: translate(-50%, 0); visibility: visible; }
 /* 칸 아래 "≈ 165,600원" / "= $127.38 · 환율 1,300원" */
 .cur-hint {
     display: block;
+    min-height: 1.35em;   /* 칸이 비어 글자가 없어도 한 줄 자리를 남겨요 (입력할 때마다 아래 내용이 오르내리지 않게) */
     margin-top: 4px;
     font-size: 0.75rem;
+    line-height: 1.35;
     color: var(--text-3);
     font-variant-numeric: tabular-nums;
 }
-.cur-hint:empty { display: none; }
 
 /* 결과 카드 오른쪽 위 [$ | 원]: 세부 금액을 달러/원화로 */
 .fx-view {
@@ -1439,8 +1447,9 @@ body.sheet-open .sheet { transform: translate(-50%, 0); visibility: visible; }
 
 /* ---------- 계산기 위 종목 검색 줄 (core/stock-bar.js) ---------- */
 .stock-bar { position: relative; z-index: 6; max-width: 480px; margin: -2px auto 12px; }
-.stock-bar .ss-input input { height: 44px; font-size: 0.9375rem; }
-.stock-bar .ss-list { top: calc(100% + 4px); }
+.stock-bar .ss-input input { height: 44px; font-size: 1rem; }   /* 16px: 아이폰 확대 방지 */
+/* 계산기 위 검색 목록은 칸 위에 띄우지 않고 아래 내용을 밀어내며 펼쳐요 (떠 있으면 아래 계산기 칸을 덮어서 잘못 눌려요) */
+.stock-bar .ss-list { position: static; max-height: 240px; margin-top: 4px; }
 .sb-picked {
     display: flex;
     align-items: center;
@@ -1458,6 +1467,7 @@ body.sheet-open .sheet { transform: translate(-50%, 0); visibility: visible; }
 .sb-price .tone-up { color: var(--up); }
 .sb-price .tone-down { color: var(--down); }
 .sb-price small { margin-left: 4px; font-size: 0.6875rem; font-weight: 500; color: var(--text-3); }
+.sb-price.is-empty { font-weight: 500; color: var(--text-3); }
 .sb-refresh { margin-left: 0; padding: 4px 10px; font-size: 0.75rem; }
 .sb-refresh:disabled { color: var(--text-3); cursor: default; }
 .sb-msg { margin: 4px 4px 0; font-size: 0.75rem; color: var(--text-3); }

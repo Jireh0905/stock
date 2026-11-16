@@ -23,6 +23,7 @@ import { showToast } from './core/toast.js';
 import { renderMarketBar, MARKETS, isGlobal, useRate } from './core/market.js';
 import { setupMoneyInputs } from './core/money-input.js';
 import { renderStockBar } from './core/stock-bar.js';
+import { holdResultHeight } from './core/hold-height.js';
 import { watchNetwork, isOnline, onNetworkChange, checkNow } from './core/network.js';
 
 const APP_NAME = 'Jireh';
@@ -86,23 +87,42 @@ function render({ keepScroll = false } = {}) {
         let stockBar = null;   // 종목 검색 줄 자리 (stockFill이 있는 계산기만)
         // 국내/해외를 쓰는 기능: 맨 위에 선택 버튼, 그 아래에 기능 화면
         if (current.markets) {
-            const bar = document.createElement('div');
+            let bar = document.createElement('div');
             if (current.stockFill) stockBar = document.createElement('div');
             root = document.createElement('div');
             page.append(...[bar, stockBar, root].filter(Boolean));
-            renderMarketBar(bar, session.getMarket(), (market) => {
+            const viewRoot = root;
+            const onMarket = (market) => {
                 session.setMarket(market);
                 render(); // 같은 기능을 새 시장으로 다시 그려요 (입력값은 시장마다 따로 기억)
-            }, (rate, date) => {
+            };
+            /**
+             * 기준 환율이 바뀌면(직접 입력·오늘 환율): 화면 전체를 다시 그리지 않아요.
+             * 예전에는 전체를 다시 그려서, 환율을 고친 뒤 바로 누른 칸이나 오늘 환율을 기다리며 치던 칸이 사라졌어요
+             * (휴대폰에서는 키보드가 닫혀요). 지금은 맨 위 줄만 새로 그리고, 계산기에는 다시 계산하라고 알려요.
+             */
+            const onFx = (rate, date) => {
                 session.setFx(rate, date);
-                render({ keepScroll: true }); // 새 기준 환율로 입력 안내·결과를 다시
+                drawBar();
+                applyNetwork();             // 새로 그린 [오늘 환율] 버튼도 지금 연결 상태에 맞게
+                recalcWithNewFx(viewRoot);
                 showToast(date
                     ? `${date.slice(5).replace('-', '/')} 환율 ${rate.toLocaleString('ko-KR')}원을 넣었어요`
                     : '기준 환율을 바꿨어요');
-            });
+            };
+            // 국내/해외 줄 그리기 (다시 그릴 때는 새 요소로 바꿔 끼워요. 같은 요소에 그리면 이벤트가 두 번 붙어서)
+            function drawBar() {
+                const fresh = document.createElement('div');
+                renderMarketBar(fresh, session.getMarket(), onMarket, onFx);
+                bar.replaceWith(fresh);
+                bar = fresh;
+            }
+            drawBar();
         }
         useRate(null); // 원화 환산 환율은 기준 환율에서 시작 (기능이 자기 환율을 정하면 바꿔요)
         current.mount(root, createContext(current, received));
+        // 입력하는 동안 화면 높이 유지 (휴대폰에서 화면이 위아래로 튀지 않게, core/hold-height.js)
+        holdResultHeight(root);
         // 종목 검색 줄 (국내/해외 줄 아래): 고르면 계산기의 stockFill이 정한 칸을 채워요 (국내 원화, 해외 달러)
         if (stockBar) {
             const viewRoot = root;
@@ -124,6 +144,18 @@ function render({ keepScroll = false } = {}) {
     closeDrawer();
     closeSheet();
     window.scrollTo(0, keepScroll ? scrollY : 0);
+}
+
+/**
+ * 기준 환율이 바뀐 뒤 계산기를 다시 계산하게 해요 (화면은 그대로).
+ * 계산기는 칸이 바뀌면(input 이벤트) 모든 칸을 다시 읽고 기준 환율(getFx)로 다시 계산해요. 그 신호를 대신 보내는 거예요.
+ *  - 원화로 넣는 중(₩)인 달러 칸: 진짜 칸에 신호를 보내면 money-input.js가 원화 칸을 새 환율로 맞춰요
+ *  - 그 밖: 이름 있는 칸 하나에 신호를 보내면 계산기 전체가 다시 계산돼요
+ */
+function recalcWithNewFx(root) {
+    const krwFields = [...root.querySelectorAll('.input-wrap.is-krw > input[name]')];
+    krwFields.forEach(input => input.dispatchEvent(new Event('input', { bubbles: true })));
+    if (!krwFields.length) root.querySelector('input[name]:not([type="hidden"])')?.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
 /* ---------- 입력값 (국내/해외를 쓰는 기능은 시장별로 나눠 저장) ---------- */
@@ -293,9 +325,18 @@ function applyNetwork() {
 
 /* ---------- 시작 ---------- */
 watchNetwork();
-onNetworkChange((online) => {
+// 연결 알림은 3초 동안 그 상태가 이어질 때만 띄워요 (불안정한 연결에서 "끊겼어요/다시 연결됐어요"가 번갈아 뜨지 않게)
+// 버튼 켜고 끄기(applyNetwork)는 바로 해요
+let announced = isOnline();
+let netToastTimer = null;
+onNetworkChange(() => {
     applyNetwork();
-    showToast(online ? '인터넷에 다시 연결됐어요' : '인터넷 연결이 끊겼어요');
+    clearTimeout(netToastTimer);
+    netToastTimer = setTimeout(() => {
+        if (isOnline() === announced) return;
+        announced = isOnline();
+        showToast(announced ? '인터넷에 다시 연결됐어요' : '인터넷 연결이 끊겼어요');
+    }, 3000);
 });
 // 연결 표시를 누르면: 설명을 보여주고 지금 다시 확인해요 (휴대폰은 마우스를 올려 설명을 볼 수 없어서)
 $('netStatus').addEventListener('click', async () => {
@@ -324,6 +365,16 @@ document.addEventListener('click', (e) => {
     if (!btn || btn.getAttribute('aria-pressed') === 'true') return;
     session.setFxView(btn.dataset.fxView);
     render({ keepScroll: true });
+});
+
+// 입력칸에 커서가 있는 동안 body[data-typing] → 알림을 위쪽에 (CSS). 키보드 바로 위 입력칸을 가리지 않게
+const isTypingField = (el) => !!el?.matches?.('input:not([type="hidden"]):not([type="checkbox"]), textarea');
+document.addEventListener('focusin', (e) => {
+    if (isTypingField(e.target)) document.body.dataset.typing = '';
+});
+document.addEventListener('focusout', () => {
+    // 다른 칸으로 옮겨 가는 중이면 그대로 (다음 focusin이 바로 와요)
+    setTimeout(() => { if (!isTypingField(document.activeElement)) delete document.body.dataset.typing; }, 0);
 });
 
 window.addEventListener('hashchange', () => render()); // 메뉴·카드·뒤로가기 → 주소 변경 → 화면 교체
