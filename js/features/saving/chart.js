@@ -98,8 +98,9 @@ export function chartSvg(viewRows, viewMarket) {
             </g>`;
     }).join('');
 
+    // 크기(width·height·aspect-ratio)를 처음부터 적어 둬요: 브라우저가 그림 안을 보고 높이를 다시 재지 않게 (CSS가 폭에 맞춰 늘려요)
     return `
-        <svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="연도별 원금과 수익 막대그래프">
+        <svg class="chart" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" style="aspect-ratio: ${W} / ${H}" role="img" aria-label="연도별 원금과 수익 막대그래프">
             ${grid}
             ${bars}
         </svg>`;

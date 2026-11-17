@@ -19,6 +19,7 @@ import { longDate } from './chart.js';
 import { bindNumberInputs, readValues, fillValues, readNumber, readInt, formatInput } from '../../core/number-input.js';
 import { parseNumber } from '../../core/format.js';
 import { showReceived } from '../../core/received.js';
+import { isTypingIn, whenTypingEnds } from '../../core/result-parts.js';
 
 /** 처음 열 때: 빈 한 줄 (1달 동안 오름) */
 const FIRST_STEPS = [{ dur: '1', unit: 'month', dir: 'up', pct: '' }];
@@ -73,6 +74,7 @@ export default {
         let chart = null;            // 지금 그래프 (흐름: 십자선 / 봉: 스크롤·봉 누르기)
         let selected = null;         // 누른 봉 번호 (스크롤로 다시 그려도 유지)
         let focusDay = 0;            // 봉 차트에서 화면 가운데의 거래일 → 보기를 바꿔도 같은 날짜를 보여줘요
+        let chartStale = false;      // 휴대폰에서 입력하는 동안 그래프·표를 미뤄 뒀는지 (키보드를 닫으면 다시 그려요)
         // 손실률별 표: 직접 넣은 손실률(없으면 지금 손실률)과 펼침 상태. 결과를 다시 그려도 유지해요
         const ref = { value: null, open: false };
 
@@ -171,8 +173,9 @@ export default {
                 afterUnit: afterUnit.value,
             });
             const r = result;
-            selected = null;
-            chart = renderResult(resultEl, r, currentView(r), {
+            // 결과 카드 안의 입력칸(손실률별 표)은 계산기 칸이 아니라서, 거기 있으면 입력 중으로 보지 않아요
+            const shown = renderResult(resultEl, r, currentView(r), {
+                defer: isTypingIn(view, resultEl),
                 today,
                 ref,
                 onSave: () => {
@@ -189,8 +192,11 @@ export default {
                     });
                 },
             });
+            chart = shown.chart;
+            chartStale = shown.deferred;
+            if (shown.fresh) selected = null;   // 새로 그린 그래프에는 누른 봉이 없어요
             updateStepResults();
-            if (chart?.kind === 'candle') bindCandleScroll();
+            if (shown.fresh && chart?.kind === 'candle') bindCandleScroll(); // 같은 상자에 두 번 붙이지 않게
         }
 
         const changed = () => {
@@ -379,6 +385,8 @@ export default {
             if (input.name === 'loss') ref.value = null;
             changed();
         });
+        // 키보드를 닫으면(계산기 칸에서 벗어나면) 미뤄 둔 그래프·표를 그려요
+        whenTypingEnds(view, () => { if (chartStale) refresh(); }, resultEl);
         refresh();
 
         // 다른 기능에서 손실률을 받아 들어왔으면: 강조 + 알림

@@ -5,6 +5,28 @@
  */
 import { createFlowChart, createCandleChart } from './chart.js';
 import { UNITS, unitOf, formatDays, candleCount, candleOk, MAX_CANDLES, MIN_CANDLES, aboutDate, tradingDates, needGain } from './calculator.js';
+import { patchParts } from '../../core/result-parts.js';
+
+/**
+ * 결과 카드는 덩어리(data-part)로 나눠 그려요:
+ *   head(큰 숫자·요약) · chart(그래프) · table(줄별 결과 표·안내) · ref(손실률별 표) · foot(가정·저장)
+ * 휴대폰에서 입력하는 동안에는 chart·table을 바꾸지 않고 미뤄요 (core/result-parts.js).
+ * ref는 안에 입력칸이 있어서 미루지 않아요 (키보드를 닫을 때 다시 그리면 그 칸에 있던 커서가 사라져서).
+ */
+const HEAVY = ['chart', 'table'];
+/** 결과 카드 → 지금 화면에 보이는 그래프 객체 (미루거나 그대로 둔 그래프의 객체를 계속 쓰게) */
+const shownChart = new WeakMap();
+
+/**
+ * 덩어리를 바꾼 뒤: 화면에 실제로 보이는 그래프 객체를 정해요.
+ * @returns {{ chart: object | null, fresh: boolean, deferred: boolean }} fresh: 그래프를 새로 그렸는지
+ */
+function settle(el, out, chart) {
+    const fresh = out.fresh.has('*') || out.fresh.has('chart');
+    if (fresh) shownChart.set(el, chart);
+    else if (!el.querySelector(':scope > [data-part="chart"]')) shownChart.delete(el);
+    return { chart: shownChart.get(el) ?? null, fresh, deferred: out.deferred };
+}
 
 /** 숫자를 소수 digits자리로, 큰 값은 쉼표도: 99900 → "99,900.00" */
 const fixed = (n, digits = 2) => n.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits });
@@ -149,24 +171,28 @@ function defaultCaption(chart, view) {
  * @param {HTMLElement} el
  * @param {object | null} r - calculateRecovery() 결과
  * @param {string} view - 'flow' | 'day' | 'week' | 'month' | 'year' (index.js가 정한 지금 보기)
- * @param {{ onSave: Function, today: Date, ref?: { value: number | null, open: boolean } }} options
+ * @param {{ onSave: Function, today: Date, ref?: { value: number | null, open: boolean }, defer?: boolean }} options
  *   today: 지금(오늘). 날짜 계산 기준 / ref: 손실률별 표의 입력값(없으면 지금 손실률)과 펼침 상태
- * @returns {object | null} 그래프 객체 (흐름: 십자선용 pick / 봉: 스크롤·봉 누르기용), 그래프가 없으면 null
+ *   defer: 휴대폰에서 입력하는 중이라 그래프·표를 미룰지
+ * @returns {{ chart: object | null, fresh: boolean, deferred: boolean }}
+ *   chart: 화면에 보이는 그래프 객체 (흐름: 십자선용 pick / 봉: 스크롤·봉 누르기용), 그래프가 없으면 null
+ *   fresh: 그래프를 이번에 새로 그렸는지 (새로 그렸을 때만 스크롤 연결) / deferred: 미뤄 둔 덩어리가 있는지
  */
-export function renderResult(el, r, view, { onSave, today, ref }) {
+export function renderResult(el, r, view, { onSave, today, ref, defer = false }) {
     // 그래프는 실제 px로 그려서, 카드 안쪽 폭을 재서 넘겨줘요 (좌우 여백 20px씩)
     const width = Math.max(el.clientWidth - 40, 260);
     el.className = 'card result-card';
+    const opts = { defer, heavy: HEAVY };
     if (!r) {
-        el.innerHTML = `<div class="result-empty"><span class="icon">📉</span>지금 손실률이나 앞으로의 오르내림을 입력하면<br>본전까지 얼마나 걸리는지 보여줘요</div>`;
-        return null;
+        return settle(el, patchParts(el, `<div class="result-empty" data-part="empty"><span class="icon">📉</span>지금 손실률이나 앞으로의 오르내림을 입력하면<br>본전까지 얼마나 걸리는지 보여줘요</div>`, opts), null);
     }
     if (r.status === 'total') {
-        el.innerHTML = `
+        return settle(el, patchParts(el, `
+            <div data-part="head">
             <div class="result-label">본전까지 필요한 상승률</div>
             <div class="result-amount result-amount-text">회복할 수 없어요</div>
-            <p class="note">100% 손실이면 남은 돈이 0이라, 몇 %가 올라도 0이에요.</p>`;
-        return null;
+            <p class="note">100% 손실이면 남은 돈이 0이라, 몇 %가 올라도 0이에요.</p>
+            </div>`, opts), null);
     }
 
     const days = r.series.length - 1;
@@ -199,10 +225,13 @@ export function renderResult(el, r, view, { onSave, today, ref }) {
            ${r.valid.length ? '<span><i class="lg-band"></i>입력한 줄 (번호)</span>' : ''}
            <span><i class="lg-base"></i>본전</span>`;
 
-    el.innerHTML = `
+    const out = patchParts(el, `
+        <div data-part="head">
         ${head}
         ${summary ? `<ul class="rows rows-tight">${summary}</ul>` : ''}
+        </div>
 
+        <div data-part="chart">
         <h3 class="sub-title">앞으로의 흐름 <span class="sub-title-note">산 가격 = 본전 · 오늘부터 거래일</span></h3>
         ${chart ? `
             ${viewToggle(days, view)}
@@ -210,15 +239,23 @@ export function renderResult(el, r, view, { onSave, today, ref }) {
             <div class="chart-wrap" data-chart>${chart.html}</div>
             <div class="chart-legend">${legend}</div>`
         : '<p class="note">"앞으로 오르고 내리면"에 줄을 넣거나 "그 뒤로"를 넣으면 본전까지의 흐름을 그래프로 보여줘요 (흐름·일봉·주봉·월봉·년봉).</p>'}
+        </div>
+        <div data-part="table">
         ${stepTable(r)}
         ${skipped.length ? `<p class="note">${skipped.join('·')}은 100%보다 많이 내릴 수 없어서 빼고 계산했어요.</p>` : ''}
         ${r.cut ? '<p class="note">50년이 넘는 부분은 잘라서 계산했어요.</p>' : ''}
         ${sumNote(r)}
+        </div>
+        <div data-part="ref">
         ${refTable({ value: ref?.value ?? (r.loss > 0 ? r.loss : 30), open: !!ref?.open })}
+        </div>
+        <div data-part="foot">
         <p class="note">1주 = 5거래일, 1달 = 21거래일, 1년 = 252거래일로 계산하고, 한 줄 안에서는 매일 같은 비율로 움직인다고 봐요.
             날짜는 오늘부터 주말과 공휴일 몫을 빼고 센 예상 날짜예요. 수수료·세금은 넣지 않았어요.</p>
-        <button type="button" class="save-btn">기록에 저장</button>`;
-    el.querySelector('.save-btn').addEventListener('click', onSave);
+        <button type="button" class="save-btn">기록에 저장</button>
+        </div>`, opts);
+    // 저장 버튼은 그대로 남을 수도 있어서, 덧붙이지 않고 매번 지금 결과로 바꿔 끼워요
+    el.querySelector('.save-btn').onclick = onSave;
     if (chart) chart.defaultCaption = defaultCaption(chart, view);
-    return chart;
+    return settle(el, out, chart);
 }

@@ -324,6 +324,10 @@ function applyNetwork() {
 }
 
 /* ---------- 시작 ---------- */
+// 주소에 ?debug가 있으면 휴대폰 진단 기록창을 띄워요 (임시. 평소에는 파일을 받지도 않아요)
+if (new URLSearchParams(location.search).has('debug')) {
+    import('./core/debug-overlay.js').then(m => m.startDebugOverlay());
+}
 watchNetwork();
 // 연결 알림은 3초 동안 그 상태가 이어질 때만 띄워요 (불안정한 연결에서 "끊겼어요/다시 연결됐어요"가 번갈아 뜨지 않게)
 // 버튼 켜고 끄기(applyNetwork)는 바로 해요

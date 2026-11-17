@@ -20,6 +20,7 @@ import { won, wonPrecise } from '../../core/format.js';
 import { money, inputText, isGlobal, viewMarket } from '../../core/market.js';
 import { getFx } from '../../core/session.js';
 import { showReceived } from '../../core/received.js';
+import { isTypingIn, whenTypingEnds } from '../../core/result-parts.js';
 
 export default {
     id: 'saving',
@@ -79,6 +80,7 @@ export default {
 
         let tab = ctx.inputs?.tab === 'goal' ? 'goal' : 'grow';
         let result = null;
+        let chartStale = false;  // 휴대폰에서 입력하는 동안 그래프·표를 미뤄 뒀는지 (키보드를 닫으면 다시 그려요)
 
         /* ---------- 배당 재투자 고르기 (숨은 입력칸에 저장) ---------- */
         const reinvestInput = view.querySelector('input[name="reinvest"]');
@@ -114,28 +116,31 @@ export default {
         /* ---------- 계산 + 그리기 ---------- */
         function refresh() {
             updateHints();
+            const defer = isTypingIn(view);
             if (tab === 'grow') {
                 result = calculateSaving({ ...common(), monthly: n('monthly') });
                 const r = result;
-                renderGrowResult(resultEl, r, {
+                chartStale = renderGrowResult(resultEl, r, {
+                    defer,
                     onSave: () => ctx.addRecord({
                         title: `${r.monthly > 0 ? `매달 ${money(r.monthly, market)}` : `처음 ${money(r.initial, market)}`} · ${r.years}년 · 연 ${r.yearly.toFixed(1)}%`,
                         sub: '얼마가 될까',
                         data: snapshot(),
                         result: { text: money(r.final, market), sub: `원금 ${money(r.principal, market)}`, tone: r.gain >= 0 ? 'up' : 'down' },
                     }),
-                });
+                }).deferred;
             } else {
                 result = calculateGoal({ ...common(), goal: n('goal') });
                 const r = result;
-                renderGoalResult(resultEl, r, {
+                chartStale = renderGoalResult(resultEl, r, {
+                    defer,
                     onSave: () => ctx.addRecord({
                         title: `${r.years}년 뒤 ${money(r.goal, market)} 목표`,
                         sub: '목표 금액',
                         data: snapshot(),
                         result: { text: `매달 ${money(r.monthly, market)}`, sub: `연 ${r.yearly.toFixed(1)}%` },
                     }),
-                });
+                }).deferred;
             }
         }
 
@@ -195,6 +200,8 @@ export default {
             remember();
         }));
         bindNumberInputs(view, changed);
+        // 키보드를 닫으면(입력칸에서 벗어나면) 미뤄 둔 그래프·표를 그려요
+        whenTypingEnds(view, () => { if (chartStale) refresh(); });
         showTab(tab);
 
         // 다른 기능에서 값을 받아 들어왔으면: 강조 + 알림
