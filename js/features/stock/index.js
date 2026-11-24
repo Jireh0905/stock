@@ -6,22 +6,26 @@
  *              국내                                         해외 (미국)
  *   검색 ...... data/stocks.json                             data/us-stocks.json (+ 트레이딩뷰 검색)
  *   시세 ...... 네이버 증권 실시간 (core/naver.js, JSONP)      트레이딩뷰 15분 지연 (core/tradingview.js, JSON)
- *   차트 ...... 네이버 차트 그림 (<img>)                      트레이딩뷰 차트 위젯 (iframe, 분봉~월봉)
+ *   차트 ...... 네이버 모바일 차트 그림 (<img>)               트레이딩뷰 차트 위젯 (iframe, 분봉~월봉)
  *   카드 ...... 이 파일                                       us-view.js
+ *   덤 카드 ... 애널리스트·성장·수익성·기간별 수익률·자세한 재무 (둘 다 트레이딩뷰 숫자, insight-view.js)
  * 둘 다 비공식 경로라 바뀌면 그 카드만 "불러오지 못했어요"가 돼요.
  *
  * 계산기가 아니라서 기록 버튼이 없어요 (records: false). 고른 종목·차트 종류는 입력값처럼 기억해요.
  */
 import { createStockSearch, MARKET_NAMES, escapeHtml } from '../../core/stock-search.js';
 import { loadItems } from '../../core/naver.js';
-import { loadUsQuote, addKrDividend } from '../../core/tradingview.js';
+import { loadUsQuote, addKrDividend, loadInsight } from '../../core/tradingview.js';
 import { isOnline, onNetworkChange } from '../../core/network.js';
 import { won, clockTime } from '../../core/format.js';
 import { fixed, sign, tone, arrow, row, titleHtml, rangeHtml, linksCard } from './parts.js';
 import { usPriceCard, usValueCard, usChartCard, usTitle, mountUsChart, usd } from './us-view.js';
+import { analystCard, growthCard, perfCard, financialsCard, finBody, insightWaitingCard } from './insight-view.js';
 
 /** 장중에 이 화면을 보고 있으면 이 간격으로 시세를 다시 받아요 */
 const AUTO_REFRESH_MS = 30 * 1000;
+/** 애널리스트·성장 같은 덤 정보는 하루에 몇 번 안 바뀌어서, 받은 지 이만큼 지났을 때만 다시 받아요 */
+const INSIGHT_MAX_AGE = 10 * 60 * 1000;
 
 /** 차트 그림 종류: [주소 조각, 버튼 글자] */
 const CHARTS = [
@@ -31,8 +35,13 @@ const CHARTS = [
 ];
 /** 처음 열 때 차트: 일봉 */
 const DEFAULT_CHART = 'candle/day';
+/**
+ * 네이버 증권 "모바일" 차트 그림 (658×408). PC용 그림보다 글자가 크고, 이동평균선(5·20·60)과 거래량이 같이 있어요.
+ * 주소 조각은 PC용과 같고, '오늘'만 mobile/day예요. 1분마다 새 그림.
+ * (국내 종목은 트레이딩뷰 차트 위젯에 나오지 않아서 그림을 써요 — 위젯에 넣으면 다른 종목으로 바뀌어요)
+ */
 const chartUrl = (kind, code) =>
-    `https://ssl.pstatic.net/imgfinance/chart/item/${kind}/${code}.png?t=${Math.floor(Date.now() / 60000)}`; // 1분마다 새 그림
+    `https://ssl.pstatic.net/imgfinance/chart/mobile/${kind === 'area/day' ? 'day' : kind}/${code}_end.png?t=${Math.floor(Date.now() / 60000)}`;
 
 /* ---------- 숫자 글자 ---------- */
 
@@ -160,10 +169,11 @@ function chartCard(stock, kind) {
             </div>
             <div class="st-chart">
                 ${isOnline()
-                    ? `<img src="${chartUrl(kind, stock.code)}" alt="${escapeHtml(stock.name)} ${CHARTS.find(c => c[0] === kind)?.[1]} 차트" width="700" height="289" data-chart-img>`
+                    ? `<img src="${chartUrl(kind, stock.code)}" alt="${escapeHtml(stock.name)} ${CHARTS.find(c => c[0] === kind)?.[1]} 차트" width="658" height="408" data-chart-img>`
                     : '<p class="mk-msg">인터넷에 연결되면 보여요</p>'}
             </div>
-            <p class="mk-note">네이버 증권 차트 그림이에요. 그림이라 누르거나 확대할 수는 없어요.</p>
+            <p class="mk-note">네이버 증권 차트 그림이에요 (봉 차트의 선은 5·20·60 이동평균, 아래 막대는 거래량). 그림이라 누르거나 확대할 수는 없어요.
+                국내 종목은 트레이딩뷰가 다른 사이트에 붙이는 차트를 막아 둬서 그림으로 보여줘요.</p>
         </section>`;
 }
 
@@ -181,12 +191,14 @@ function put(el, html) {
 
 /** 시세 상태 (모듈 변수라 화면을 떠났다 와도 남아요) { code, status, data, time, error } */
 let quote = null;
+/** 덤 정보 상태 (트레이딩뷰) { key: 'KRX:005930', status, data, time, error } */
+let insight = null;
 
 export default {
     id: 'stock',
     name: '종목 정보',
     shortName: '종목 정보',
-    desc: '국내·미국 종목 검색 · 가격·PER·PBR·배당·차트',
+    desc: '국내·미국 종목 · 가격·배당·애널리스트·차트',
     group: '정보',
     icon: 'stock',
     color: 'c10',
@@ -201,9 +213,13 @@ export default {
                     <div class="st-col">
                         <div class="st-slot" data-slot="price"></div>
                         <div class="st-slot" data-slot="value"></div>
+                        <div class="st-slot" data-slot="perf"></div>
                     </div>
                     <div class="st-col">
                         <div class="st-slot" data-slot="chart"></div>
+                        <div class="st-slot" data-slot="analyst"></div>
+                        <div class="st-slot" data-slot="growth"></div>
+                        <div class="st-slot" data-slot="fin"></div>
                         <div class="st-slot" data-slot="links"></div>
                     </div>
                 </div>
@@ -214,14 +230,48 @@ export default {
         let stock = ctx.inputs?.stock ?? null;       // 국내 { kind:'kr', code, name, market } / 해외 { kind:'us', code, name, en, exchange, type }
         if (stock && (stock.kind ?? 'kr') !== (us ? 'us' : 'kr')) stock = null;
         let chartKind = CHARTS.some(c => c[0] === ctx.inputs?.chart) ? ctx.inputs.chart : DEFAULT_CHART;
-        const remember = () => ctx.saveInputs({ stock, chart: chartKind });
+        let finView = ctx.inputs?.finView === 'quarter' ? 'quarter' : 'annual';   // 자세한 재무 추이 [연간 | 분기]
+        const remember = () => ctx.saveInputs({ stock, chart: chartKind, finView });
+        /** 트레이딩뷰 이름: 국내 'KRX:005930', 해외 'NASDAQ:AAPL' */
+        const ticker = () => (stock ? (us ? `${stock.exchange}:${stock.code}` : `KRX:${stock.code}`) : '');
+
+        /**
+         * 자세한 재무 칸: 틀(<details>)은 종목이 바뀔 때만 새로 만들어요 (펼친 상태가 시세 갱신 때 접히지 않게).
+         * 안쪽 내용은 바뀌었을 때만 다시 그려요 (put).
+         */
+        const drawFin = (fin) => {
+            const key = fin ? ticker() : '';
+            if (slot('fin').dataset.key !== key) {
+                slot('fin').dataset.key = key;
+                slot('fin').innerHTML = fin ? financialsCard() : '';
+            }
+            if (fin) put(slot('fin').querySelector('[data-fin-box]'), finBody(fin, finView));
+        };
+
+        /** 덤 카드: 애널리스트 · 성장·수익성 · 기간별 수익률 · 자세한 재무 */
+        const drawInsight = (q) => {
+            const ins = insight?.key === ticker() ? insight : null;
+            if (!ins?.data) {
+                put(slot('perf'), '');
+                put(slot('analyst'), insightWaitingCard(ins));
+                put(slot('growth'), '');
+                drawFin(null);
+                return;
+            }
+            const fmt = us ? usd : (n) => `${won(n)}원`;
+            put(slot('perf'), perfCard(ins.data));
+            put(slot('analyst'), analystCard(ins.data, q?.data?.price ?? null, fmt));
+            put(slot('growth'), growthCard(ins.data, fmt));
+            drawFin(ins.data.fin);   // ETF처럼 재무가 없으면 숨겨요
+        };
 
         const draw = () => {
             if (!view.isConnected) return;
             const q = quote?.code === stock?.code ? quote : null;
             if (!stock) {
                 put(slot('price'), emptyCard());
-                ['value', 'links'].forEach(n => put(slot(n), ''));
+                ['value', 'links', 'perf', 'analyst', 'growth'].forEach(n => put(slot(n), ''));
+                drawFin(null);
                 slot('chart').innerHTML = '';   // 차트는 아래에서 종목·종류로 따로 관리해서 put을 쓰지 않아요
                 delete slot('chart').dataset.key;
                 return;
@@ -239,6 +289,7 @@ export default {
                 put(slot('value'), valueCard(stock, q.data));
                 put(slot('links'), linksCard(q.data, (n) => `${won(n)}원`, '국내 주식'));
             }
+            drawInsight(q);
             if (us) {
                 // 해외 차트: 트레이딩뷰 위젯은 종목이 바뀌거나 연결될 때만 새로 넣어요 (다시 넣으면 새로 로딩돼서)
                 const key = `${stock.exchange}:${stock.code}|${isOnline()}`;
@@ -266,9 +317,33 @@ export default {
             }
         };
 
+        /**
+         * 덤 정보 받기 (시세와 따로라 실패해도 가격 카드는 그대로예요).
+         * 받는 중이거나 받은 지 10분이 안 됐으면 건너뛰어요. force면 10분 안이어도 다시.
+         */
+        const loadMore = async (force = false) => {
+            if (!stock || !isOnline()) return;
+            const key = ticker();
+            if (insight?.key === key) {
+                if (insight.status === 'loading') return;
+                if (!force && insight.data && Date.now() - insight.time < INSIGHT_MAX_AGE) return;
+            }
+            insight = { ...(insight?.key === key ? insight : { key }), status: 'loading' };
+            draw();
+            try {
+                const data = await loadInsight(key);
+                if (insight?.key === key) insight = { key, status: 'ok', data, time: data.time };
+            } catch (err) {
+                // 예전에 받은 값이 있으면 그대로 보여줘요 (data는 남기고 상태만)
+                if (insight?.key === key) insight = { ...insight, status: 'error', error: err.message };
+            }
+            draw();
+        };
+
         /** 시세 받기 (같은 종목을 이미 받는 중이면 건너뛰어요) */
         const load = async () => {
             if (!stock || !isOnline()) return draw();
+            loadMore();
             const code = stock.code;
             if (quote?.code === code && quote.status === 'loading') return;
             quote = { ...(quote?.code === code ? quote : { code }), status: 'loading' };
@@ -303,6 +378,13 @@ export default {
 
         view.addEventListener('click', (e) => {
             if (e.target.closest('[data-retry]')) return load();
+            if (e.target.closest('[data-insight-retry]')) return loadMore(true);
+            const finTab = e.target.closest('[data-fin-view]');
+            if (finTab) {
+                finView = finTab.dataset.finView;
+                remember();
+                return draw();
+            }
             const tab = e.target.closest('[data-chart]');
             if (tab) {
                 chartKind = tab.dataset.chart;
@@ -334,7 +416,10 @@ export default {
             if (!view.isConnected) return stopWatching();
             const fresh = quote?.code === stock?.code && quote.status === 'ok';
             if (online && !fresh) load();
-            else draw();
+            else {
+                if (online) loadMore();   // 시세는 받아 뒀어도 덤 정보를 못 받았으면
+                draw();
+            }
         });
 
         // 자동 갱신: 이 화면을 보고 있고, 탭이 보이고, 온라인일 때만

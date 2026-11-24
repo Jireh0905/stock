@@ -1567,6 +1567,52 @@ body[data-typing] .toast.show { transform: translate(-50%, 0); }
 @media (max-width: 480px) { .st-tv { height: 360px; } }
 .st-page .mk-msg small { display: block; color: var(--text-3); }
 
+/* 애널리스트 의견 (stock/insight-view.js): 큰 글자 의견 + 매수·중립·매도 막대 */
+.st-opinion { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; }
+.st-opinion-label { font-size: 1.375rem; font-weight: 800; letter-spacing: -0.01em; }
+.st-opinion-label.is-strong-buy, .st-opinion-label.is-buy { color: var(--up); }
+.st-opinion-label.is-hold { color: var(--text-2); }
+.st-opinion-label.is-sell, .st-opinion-label.is-strong-sell { color: var(--down); }
+.st-opinion-count { font-size: 0.8125rem; color: var(--text-3); }
+.st-vote-bar { display: flex; gap: 2px; height: 10px; margin-top: 10px; overflow: hidden; border-radius: 5px; background: var(--surface-2); }
+.st-vote-bar i { display: block; height: 100%; }
+.v-buy { background: var(--up); }
+.v-hold { background: var(--text-3); }
+.v-sell { background: var(--down); }
+.st-vote-legend { display: flex; gap: 14px; margin-top: 6px; font-size: 0.75rem; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.st-vote-legend i { display: inline-block; width: 8px; height: 8px; margin-right: 4px; border-radius: 2px; }
+.st-vote-detail { margin: 4px 0 0; font-size: 0.6875rem; color: var(--text-3); }
+/* 목표주가 막대: 52주 막대 모양 + 평균 목표가 눈금 */
+.st-target { margin-top: 6px; padding-top: 0; border-top: 0; }
+.st-target .st-range-bar s {
+    position: absolute;
+    top: 50%;
+    width: 2px;
+    height: 16px;
+    background: var(--text-2);
+    transform: translate(-50%, -50%);
+}
+/* 기간별 수익률: 3칸씩 */
+.st-perf { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.st-perf-item { padding: 8px 4px; border-radius: 10px; background: var(--surface-2); text-align: center; }
+.st-perf-item span { display: block; font-size: 0.75rem; color: var(--text-3); }
+.st-perf-item b { display: block; margin-top: 2px; font-size: 0.9375rem; font-variant-numeric: tabular-nums; }
+.st-perf-item.is-up b { color: var(--up); }
+.st-perf-item.is-down b { color: var(--down); }
+/* 자세한 재무 (insight-view.js finBody): 매출·순이익 추이 막대 + 표, 손익·재무상태·현금흐름·가치 줄 */
+.st-fin summary { cursor: pointer; font-weight: 700; font-size: 0.9375rem; }
+.st-fin[open] summary { margin-bottom: 4px; }
+.fin-tabs { grid-template-columns: 1fr 1fr; max-width: 180px; margin: 4px 0 8px; }
+.fin-chart .fin-rev { fill: var(--primary); opacity: .55; }
+.fin-chart .fin-net { fill: var(--up); }
+.fin-chart .fin-net.is-loss { fill: var(--down); }
+.fin-chart .grid-line.is-zero { stroke: var(--text-3); }
+.chart-legend .lg-fin-rev { background: var(--primary); opacity: .55; }
+.chart-legend .lg-fin-net { background: var(--up); }
+.chart-legend .lg-fin-loss { background: var(--down); }
+.fin-table { margin-top: 10px; }
+.st-fin .st-rows li span:first-child { min-width: 0; }
+
 /* 넓을 때: 왼쪽(가격·가치) + 오른쪽(차트·계산기로) */
 @container (min-width: 760px) {
     .st-page { max-width: 920px; }
