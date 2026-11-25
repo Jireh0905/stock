@@ -28,7 +28,7 @@ const TIMEOUT = 10000;
  * fetch는 응답이 올 때까지 기다리는 "약속(Promise)"을 돌려줘요. await는 그 약속이 끝날 때까지 기다려요.
  * (WinHttp로 동기 호출하는 것과 비슷하지만, 기다리는 동안 화면이 멈추지 않아요)
  */
-async function getText(url) {
+export async function getText(url) {
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), TIMEOUT);
     try {
@@ -40,17 +40,17 @@ async function getText(url) {
     }
 }
 
-const getJson = async (url) => JSON.parse(await getText(url));
+export const getJson = async (url) => JSON.parse(await getText(url));
 
 /** 숫자가 맞는지 확인 (응답 모양이 바뀌었을 때 엉뚱한 값을 보여주지 않게) */
-function num(v, what) {
+export function num(v, what) {
     const n = typeof v === 'string' ? parseFloat(v) : v;
     if (!Number.isFinite(n)) throw new Error(`${what} 값이 없어요`);
     return n;
 }
 
 /** 'YYYY-MM-DD' (n일 전) */
-function daysAgo(n) {
+export function daysAgo(n) {
     const d = new Date(Date.now() - n * 864e5);
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
@@ -58,7 +58,7 @@ function daysAgo(n) {
 /* ---------- 환율 (유럽중앙은행) ---------- */
 
 /** 달러 인덱스 공식에 들어가는 통화 6개 (ICE 공식 가중치) */
-const DXY_CODES = ['EUR', 'JPY', 'GBP', 'CAD', 'SEK', 'CHF'];
+export const DXY_CODES = ['EUR', 'JPY', 'GBP', 'CAD', 'SEK', 'CHF'];
 
 /**
  * 달러 인덱스(DXY) 근사값. 6개 통화에 대한 달러 값을 가중 기하평균으로 계산해요.
@@ -135,18 +135,21 @@ export function parseCsv(text) {
 }
 
 /** 'MM/DD/YYYY' → 'YYYY-MM-DD' */
-const isoFromUs = (s) => {
+export const isoFromUs = (s) => {
     const [m, d, y] = s.split('/');
     return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
 };
+
+/** 미국 재무부 국채 금리 CSV (그 해 전체, 하루 한 줄) */
+export const treasuryUrl = (y) => 'https://home.treasury.gov/resource-center/data-chart-center/interest-rates/daily-treasury-rates.csv/'
+    + `${y}/all?type=daily_treasury_yield_curve&field_tdr_date_value=${y}&page&_format=csv`;
 
 /**
  * 미국 국채 금리 (만기별 수익률, %). 최근 영업일과 그 전 영업일.
  * 재무부 CSV는 한 해 치씩 있어서, 1월 초처럼 올해 줄이 2개보다 적으면 작년 것도 받아요.
  */
 export async function loadTreasury() {
-    const url = (y) => 'https://home.treasury.gov/resource-center/data-chart-center/interest-rates/daily-treasury-rates.csv/'
-        + `${y}/all?type=daily_treasury_yield_curve&field_tdr_date_value=${y}&page&_format=csv`;
+    const url = treasuryUrl;
     const year = new Date().getFullYear();
     let rows = parseCsv(await getText(url(year)));
     if (rows.length < 2) rows = rows.concat(parseCsv(await getText(url(year - 1))));
@@ -189,16 +192,16 @@ export async function loadBinance() {
 
 /* ---------- 트레이딩뷰: 해외 선물·달러 인덱스·한국 국채 ---------- */
 
-/** 해외 선물 (근월물 연결): [티커, 이름, 단위] */
+/** 해외 선물 (근월물 연결): [티커, 이름, 단위, 펼치기 키(detail.js)] */
 export const TV_FUTURES = [
-    ['CME_MINI:NQ1!', '나스닥100 선물', '포인트'],
-    ['CME_MINI:ES1!', 'S&P500 선물', '포인트'],
-    ['NYMEX:CL1!', 'WTI 원유 선물', '$/배럴'],
-    ['COMEX:GC1!', '금 선물', '$/온스'],
+    ['CME_MINI:NQ1!', '나스닥100 선물', '포인트', 'fut:NQ'],
+    ['CME_MINI:ES1!', 'S&P500 선물', '포인트', 'fut:ES'],
+    ['NYMEX:CL1!', 'WTI 원유 선물', '$/배럴', 'fut:CL'],
+    ['COMEX:GC1!', '금 선물', '$/온스', 'fut:GC'],
 ];
 const TV_DXY = 'TVC:DXY';
 /** 한국 국채 금리: [티커, 만기] */
-export const TV_KR_BONDS = [['TVC:KR03Y', '3년'], ['TVC:KR10Y', '10년']];
+export const TV_KR_BONDS = [['TVC:KR03Y', '3년', 'krb:3'], ['TVC:KR10Y', '10년', null]];   // 10년은 차트 그림이 없어요
 
 /**
  * 트레이딩뷰에서 한 번의 요청으로 선물 4개 + 달러 인덱스 + 한국 국채 2개를 받아요.
@@ -210,9 +213,9 @@ export async function loadTv() {
     const q = (t) => quoteOf(rows.get(t));
     const data = {
         time: Date.now(),
-        futures: TV_FUTURES.map(([t, name, unit]) => ({ name, unit, quote: q(t) })),
+        futures: TV_FUTURES.map(([t, name, unit, key]) => ({ name, unit, key, quote: q(t) })),
         dxy: q(TV_DXY),
-        krBonds: TV_KR_BONDS.map(([t, label]) => ({ label, quote: q(t) })),
+        krBonds: TV_KR_BONDS.map(([t, label, key]) => ({ label, key, quote: q(t) })),
     };
     if (!data.dxy && data.futures.every(f => !f.quote)) throw new Error('트레이딩뷰 값이 없어요');
     return data;

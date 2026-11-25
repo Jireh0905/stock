@@ -2,6 +2,7 @@
  * fx/index.js — 시장 지표 (국내 증시·해외 선물·환율·금리·금·비트코인)
  *
  *   sources.js ... 출처마다 받아오기 (화면과 무관)
+ *   detail.js .... 항목을 펼쳤을 때: 차트 + 일별 시세 (항목마다 쓸 수 있는 출처가 달라요)
  *   index.js ..... 카드 그리기 + 새로고침 + 장중 자동 갱신 + 기준 환율로 쓰기 (이 파일)
  *
  * 계산기가 아니라서 국내/해외 버튼·입력값·기록이 없어요 (records: false → 기록 버튼도 숨겨요).
@@ -14,6 +15,8 @@ import { getFx, setFx } from '../../core/session.js';
 import { showToast } from '../../core/toast.js';
 import { clockTime } from '../../core/format.js';
 import { isOnline, onNetworkChange } from '../../core/network.js';
+import { morph } from '../../core/morph.js';
+import { DETAILS, detailHtml, loadGroup, groupOf, mountWidget, toggleLabel, viewOf } from './detail.js';
 
 /** 이 시간 안에 다시 들어오면 받아둔 값을 그대로 써요 (메뉴를 오갈 때마다 요청하지 않게) */
 const FRESH_MS = 60 * 1000;
@@ -28,6 +31,8 @@ const AUTO_REFRESH_MS = 60 * 1000;
 const state = {};
 /** 마지막으로 모두 불러온 시각 */
 let loadedAt = null;
+/** 펼쳐 둔 항목 (detail.js의 키). 화면을 떠났다 와도 그대로 펼쳐져 있어요 */
+const opened = new Set();
 
 /* ---------- 숫자 글자 ---------- */
 
@@ -67,12 +72,21 @@ function bpChange(now, prev) {
  * @param {string} sub - 이름 아래 작은 글자 (예: 1달러)
  * @param {string} value - 값 글자
  * @param {string} [chg] - 변화 글자 (change/bpChange)
+ * @param {string | null} [key] - 펼치기 키 (detail.js DETAILS). 있으면 이름 아래 "▸ 차트" 버튼, 펼쳤으면 아래 칸
  */
-const row = (name, sub, value, chg = '') => `
-    <li class="mk-row">
-        <span class="mk-name">${name}${sub ? `<small>${sub}</small>` : ''}</span>
+const row = (name, sub, value, chg = '', key = null) => {
+    const can = key && DETAILS[key];
+    const open = can && opened.has(key);
+    const btn = can
+        ? `<button type="button" class="mk-open" data-detail="${key}" aria-expanded="${open}">${open ? '▾' : '▸'} ${toggleLabel(key)}</button>`
+        : '';
+    // 펼친 칸은 data-keep: 1분마다 카드를 다시 그려도 안쪽(차트·위젯)은 그대로 둬요 (core/morph.js)
+    return `
+    <li class="mk-row${open ? ' is-open' : ''}">
+        <span class="mk-name">${name}${sub ? `<small>${sub}</small>` : ''}${btn}</span>
         <span class="mk-val"><b>${value}</b>${chg}</span>
-    </li>`;
+    </li>${open ? `<li class="mk-detail" data-keep="${key}" data-detail-slot="${key}"></li>` : ''}`;
+};
 
 /** 묶음 제목: "국채 금리 · 미국 재무부 · 11/12 기준" */
 const section = (title, meta) => `<li class="mk-section"><b>${title}</b>${meta ? `<span>${meta}</span>` : ''}</li>`;
@@ -112,6 +126,7 @@ function krCard() {
             it.open ? '<span class="mk-live">장중</span>' : '장 마감',
             fixed(it.value),
             change(it.value, it.prev),
+            `kr:${it.code}`,
         )).join('');
     }
     const meta = state.kr?.data ? `네이버 증권 · ${timeOf('kr')}${staleNote('kr')}` : '네이버 증권';
@@ -133,7 +148,7 @@ function futuresCard() {
     let body = placeholder('tv');
     if (!body) {
         body = state.tv.data.futures.map(f => f.quote
-            ? row(f.name, f.unit, fixed(f.quote.value), change(f.quote.value, f.quote.prev))
+            ? row(f.name, f.unit, fixed(f.quote.value), change(f.quote.value, f.quote.prev), f.key)
             : row(f.name, f.unit, '—')).join('');
     }
     const first = state.tv?.data?.futures.find(f => f.quote)?.quote;
@@ -151,8 +166,8 @@ function futuresCard() {
 /** 달러 인덱스: 트레이딩뷰 실제 값이 있으면 그것, 없으면 유럽중앙은행 환율로 계산한 근사값 */
 function dxyRow(now, prev) {
     const dxy = state.tv?.data?.dxy;
-    if (dxy) return row('달러 인덱스', tvMeta(dxy), fixed(dxy.value), change(dxy.value, dxy.prev));
-    return row('달러 인덱스', '근사값 · 6개 통화로 계산', fixed(dollarIndex(now)), change(dollarIndex(now), dollarIndex(prev)));
+    if (dxy) return row('달러 인덱스', tvMeta(dxy), fixed(dxy.value), change(dxy.value, dxy.prev), 'fx:DXY');
+    return row('달러 인덱스', '근사값 · 6개 통화로 계산', fixed(dollarIndex(now)), change(dollarIndex(now), dollarIndex(prev)), 'fx:DXY');
 }
 
 function fxCard() {
@@ -164,11 +179,11 @@ function fxCard() {
         // 원/엔처럼 원화로 보는 값은 "1달러 = 몇 원 ÷ 1달러 = 몇 엔"으로 바꿔요
         const krwPer = (r, code, unit = 1) => r.KRW / r[code] * unit;
         body = [
-            row('원/달러', '1달러', fixed(now.KRW), change(now.KRW, prev.KRW)),
-            row('엔/달러', '1달러', fixed(now.JPY), change(now.JPY, prev.JPY)),
-            row('원/100엔', '100엔', fixed(krwPer(now, 'JPY', 100)), change(krwPer(now, 'JPY', 100), krwPer(prev, 'JPY', 100))),
-            row('원/위안', '1위안', fixed(krwPer(now, 'CNY')), change(krwPer(now, 'CNY'), krwPer(prev, 'CNY'))),
-            row('원/유로', '1유로', fixed(krwPer(now, 'EUR')), change(krwPer(now, 'EUR'), krwPer(prev, 'EUR'))),
+            row('원/달러', '1달러', fixed(now.KRW), change(now.KRW, prev.KRW), 'fx:KRW'),
+            row('엔/달러', '1달러', fixed(now.JPY), change(now.JPY, prev.JPY), 'fx:JPY'),
+            row('원/100엔', '100엔', fixed(krwPer(now, 'JPY', 100)), change(krwPer(now, 'JPY', 100), krwPer(prev, 'JPY', 100)), 'fx:JPY100'),
+            row('원/위안', '1위안', fixed(krwPer(now, 'CNY')), change(krwPer(now, 'CNY'), krwPer(prev, 'CNY')), 'fx:CNY'),
+            row('원/유로', '1유로', fixed(krwPer(now, 'EUR')), change(krwPer(now, 'EUR'), krwPer(prev, 'EUR')), 'fx:EUR'),
             dxyRow(now, prev),
         ].join('');
 
@@ -196,7 +211,7 @@ function ratesCard() {
     if (!fed) {
         const d = state.fed.data;
         fed = row('목표 범위', '연준이 정한 기준 금리', `${fixed(d.from)}~${fixed(d.to)}%`)
-            + row('실효 금리', 'EFFR · 은행 간 하루 대출 평균', `${fixed(d.effr)}%`, bpChange(d.effr, d.prevEffr));
+            + row('실효 금리', 'EFFR · 은행 간 하루 대출 평균', `${fixed(d.effr)}%`, bpChange(d.effr, d.prevEffr), 'fed:effr');
     }
     const fedMeta = state.fed?.data ? `뉴욕 연은 · ${shortDate(state.fed.data.date)} 기준${staleNote('fed')}` : '뉴욕 연은';
 
@@ -206,10 +221,10 @@ function ratesCard() {
         const { now, prev } = state.treasury.data;
         const spread = now['10 Yr'] - now['2 Yr'];
         const prevSpread = prev['10 Yr'] - prev['2 Yr'];
-        ust = TENORS.map(([key, label]) => row(label, '', `${fixed(now[key])}%`, bpChange(now[key], prev[key]))).join('')
+        ust = TENORS.map(([key, label]) => row(label, '', `${fixed(now[key])}%`, bpChange(now[key], prev[key]), `ust:${key}`)).join('')
             + `<li class="mk-gap"></li>`
             + row('장단기 금리차', `10년 − 2년${spread < 0 ? ' · <em class="mk-tag">역전</em>' : ''}`,
-                `${spread >= 0 ? '+' : '−'}${fixed(Math.abs(spread))}%p`, bpChange(spread, prevSpread));
+                `${spread >= 0 ? '+' : '−'}${fixed(Math.abs(spread))}%p`, bpChange(spread, prevSpread), 'ust:spread');
     }
     const ustMeta = state.treasury?.data
         ? `미국 재무부 · ${shortDate(state.treasury.data.date)} 기준 (${shortDate(state.treasury.data.prevDate)} 대비)${staleNote('treasury')}`
@@ -224,7 +239,7 @@ function ratesCard() {
     let krBonds = placeholder('tv');
     if (!krBonds) {
         krBonds = state.tv.data.krBonds.map(b => b.quote
-            ? row(b.label, '', `${fixed(b.quote.value, 3)}%`, bpChange(b.quote.value, b.quote.prev))
+            ? row(b.label, '', `${fixed(b.quote.value, 3)}%`, bpChange(b.quote.value, b.quote.prev), b.key)
             : row(b.label, '', '—')).join('');
     }
     const firstBond = state.tv?.data?.krBonds.find(b => b.quote)?.quote;
@@ -250,15 +265,15 @@ function coinCard() {
     let gold = placeholder('gold');
     if (!gold) {
         const oz = state.gold.data.price;
-        gold = row('금 1온스', '트로이온스 = 31.1g', `$${fixed(oz)}`)
+        gold = row('금 1온스', '트로이온스 = 31.1g', `$${fixed(oz)}`, '', 'gold')
             + row('금 1g', '원/달러 기준가로 환산', usdKrw ? `${fixed(oz / GRAMS_PER_OZ * usdKrw, 0)}원` : needFx);
     }
     const goldMeta = state.gold?.data ? `gold-api.com · ${timeOf('gold')}${staleNote('gold')}` : 'gold-api.com';
 
     const up = placeholder('upbit') ?? row('업비트', '원화 · 오늘 0시 대비',
-        `${fixed(state.upbit.data.price, 0)}원`, change(state.upbit.data.price, state.upbit.data.prev, 0));
+        `${fixed(state.upbit.data.price, 0)}원`, change(state.upbit.data.price, state.upbit.data.prev, 0), 'btc:upbit');
     const bn = placeholder('binance') ?? row('바이낸스', 'USDT · 24시간 전 대비',
-        `$${fixed(state.binance.data.price)}`, change(state.binance.data.price, state.binance.data.prev));
+        `$${fixed(state.binance.data.price)}`, change(state.binance.data.price, state.binance.data.prev), 'btc:binance');
 
     const times = ['upbit', 'binance'].filter(id => state[id]?.data).map(timeOf);
     const coinMeta = `업비트 · 바이낸스${times.length ? ` · ${times[0]}` : ''}${staleNote('upbit')}${staleNote('binance')}`;
@@ -322,11 +337,22 @@ export default {
             kr: krCard, fut: futuresCard, fx: fxCard, rates: ratesCard, coin: coinCard,
         };
 
+        /** 펼친 칸 채우기: 차트·표는 바뀌었을 때만 다시(put), 트레이딩뷰 위젯은 한 번만 */
+        const fillDetails = () => {
+            view.querySelectorAll('[data-detail-slot]').forEach(box => {
+                const key = box.dataset.detailSlot;
+                if (DETAILS[key]?.type === 'widget') mountWidget(box, key);
+                else put(box, detailHtml(key));
+            });
+        };
+
         const draw = () => {
             if (!view.isConnected) return;   // 기다리는 동안 다른 화면으로 갔으면 그리지 않아요
+            // 카드는 바뀐 글자만 고쳐요(morph). 통째로 바꾸면 펼친 차트 위젯이 1분마다 다시 로딩돼서
             Object.entries(slots).forEach(([id, card]) => {
-                put(view.querySelector(`[data-slot="${id}"]`), card());
+                morph(view.querySelector(`[data-slot="${id}"]`), card());
             });
+            fillDetails();
             const loading = Object.values(state).some(s => s.status === 'loading');
             const online = isOnline();
             refreshBtn.toggleAttribute('data-busy', loading);  // 불러오는 중이면 app.js가 다시 켜지 않게
@@ -369,6 +395,7 @@ export default {
             if (!view.isConnected) return stopWatching();
             if (online) {
                 load(Object.keys(SOURCES).filter(id => state[id]?.status !== 'ok'), true);
+                loadOpened();
             } else {
                 draw();
             }
@@ -386,8 +413,48 @@ export default {
             if (due.length) load(due, true);
         }, AUTO_REFRESH_MS);
 
+        /** 펼쳐 둔 항목 중 날짜별 값이 필요한 묶음 받기 (10분 안에 받았으면 건너뛰어요) */
+        const loadOpened = () => {
+            new Set([...opened].map(groupOf).filter(Boolean)).forEach(g => loadGroup(g, draw));
+        };
+
+        // 차트 그림을 못 받으면 안내 글로
+        view.addEventListener('error', (e) => {
+            if (e.target.matches?.('[data-detail-img]')) {
+                e.target.replaceWith(Object.assign(document.createElement('p'), { className: 'mk-msg', textContent: '차트 그림을 불러오지 못했어요' }));
+            }
+        }, true);
+
         view.addEventListener('click', (e) => {
-            if (e.target.closest('[data-refresh]')) return load(Object.keys(SOURCES), true);
+            // 펼치기·접기
+            const toggle = e.target.closest('[data-detail]');
+            if (toggle) {
+                const key = toggle.dataset.detail;
+                if (opened.has(key)) opened.delete(key);
+                else {
+                    opened.add(key);
+                    if (groupOf(key)) loadGroup(groupOf(key), draw);
+                }
+                return draw();
+            }
+            // 펼친 칸 안: 기간 탭 · 그림 종류 · 더 보기 · 다시 시도
+            const box = e.target.closest('[data-detail-slot]');
+            if (box) {
+                const key = box.dataset.detailSlot;
+                const v = viewOf(key);
+                const range = e.target.closest('[data-detail-range]');
+                const kind = e.target.closest('[data-detail-kind]');
+                if (range) v.range = range.dataset.detailRange;
+                else if (kind) v.kind = kind.dataset.detailKind;
+                else if (e.target.closest('[data-detail-more]')) v.rows = 30;
+                else if (e.target.closest('[data-detail-retry]')) return loadGroup(groupOf(key), draw, true);
+                else return;
+                return draw();
+            }
+            if (e.target.closest('[data-refresh]')) {
+                loadOpened();
+                return load(Object.keys(SOURCES), true);
+            }
             const retry = e.target.closest('[data-retry]');
             if (retry) return load([retry.dataset.retry], true);
             const use = e.target.closest('[data-use-fx]');
@@ -400,5 +467,6 @@ export default {
         });
 
         load(Object.keys(SOURCES), false);
+        loadOpened();
     },
 };
