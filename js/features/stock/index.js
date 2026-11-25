@@ -33,6 +33,8 @@ const CHARTS = [
     ['candle/day', '일봉'], ['candle/week', '주봉'], ['candle/month', '월봉'],
     ['area/month3', '3개월'], ['area/year', '1년'], ['area/year3', '3년'],
 ];
+/** '오늘' 그림 안내: 네이버 그림은 한국거래소 정규장만 그려요 (대체거래소 NXT 시간대 그림은 없어요) */
+const TODAY_NOTE = '오늘 차트는 한국거래소(KRX) 정규장 09:00~15:30만 그려요. 대체거래소(NXT)의 08:00~09:00 · 15:30~20:00 거래는 차트에 없어요.';
 /** 처음 열 때 차트: 일봉 */
 const DEFAULT_CHART = 'candle/day';
 /**
@@ -172,6 +174,7 @@ function chartCard(stock, kind) {
                     ? `<img src="${chartUrl(kind, stock.code)}" alt="${escapeHtml(stock.name)} ${CHARTS.find(c => c[0] === kind)?.[1]} 차트" width="658" height="408" data-chart-img>`
                     : '<p class="mk-msg">인터넷에 연결되면 보여요</p>'}
             </div>
+            ${kind === 'area/day' ? `<p class="mk-note st-today-note">${TODAY_NOTE}</p>` : ''}
             <p class="mk-note">네이버 증권 차트 그림이에요 (봉 차트의 선은 5·20·60 이동평균, 아래 막대는 거래량). 그림이라 누르거나 확대할 수는 없어요.
                 국내 종목은 트레이딩뷰가 다른 사이트에 붙이는 차트를 막아 둬서 그림으로 보여줘요.</p>
         </section>`;
