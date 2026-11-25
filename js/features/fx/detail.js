@@ -9,7 +9,7 @@
  *              같은 대상을 따라가는 CFD 차트를 보여줘요 (값이 선물과 조금 달라요)
  * 한국 기준 금리·한국 국채 10년은 볼 곳이 없어서 펼치기가 없어요.
  */
-import { getJson, getText, num, daysAgo, DXY_CODES, dollarIndex, parseCsv, isoFromUs, treasuryUrl, TENORS } from './sources.js';
+import { getJson, getText, num, daysAgo, DXY_CODES, dollarIndex, parseCsv, isoFromUs, treasuryUrl, TENORS, upbitJson } from './sources.js';
 import { isOnline } from '../../core/network.js';
 
 /** 받은 날짜별 값을 이만큼 기억해요 (펼 때마다 요청하지 않게) */
@@ -29,16 +29,9 @@ const GROUPS = {
         const json = await getJson(`https://api.frankfurter.dev/v1/${daysAgo(370)}..?base=USD&symbols=${codes.join(',')}`);
         return Object.keys(json?.rates ?? {}).sort().map(date => ({ date, r: json.rates[date] }));
     },
-    // 업비트 원화 비트코인 일봉: 한 번에 200개까지라 두 번 (약 400일)
+    // 업비트 원화 비트코인 일봉: 한 번에 200개(약 6달 반)까지. 1년 치는 아래 MORE가 10초 뒤에 더 받아요
     async upbit() {
-        const url = (to) => `https://api.upbit.com/v1/candles/days?market=KRW-BTC&count=200${to ? `&to=${encodeURIComponent(to)}` : ''}`;
-        const first = await getJson(url());
-        const last = first.at(-1);
-        const more = last ? await getJson(url(`${last.candle_date_time_utc}Z`)) : [];
-        return [...first, ...more]
-            .map(c => ({ date: c.candle_date_time_kst.slice(0, 10), r: num(c.trade_price, '종가') }))
-            .filter((x, i, a) => a.findIndex(y => y.date === x.date) === i)
-            .sort((a, b) => a.date.localeCompare(b.date));
+        return upbitRows(await upbitJson(upbitCandles()));
     },
     // 바이낸스 USDT 비트코인 일봉 (UTC 0시 기준 하루)
     async binance() {
@@ -61,7 +54,27 @@ const GROUPS = {
     },
 };
 
-/** 묶음별 상태 { status, rows, at, error } (모듈 변수라 화면을 떠났다 와도 남아요) */
+/** 업비트 일봉 주소 (to: 이 시각 전까지, UTC) */
+const upbitCandles = (to) => `https://api.upbit.com/v1/candles/days?market=KRW-BTC&count=200${to ? `&to=${encodeURIComponent(to)}` : ''}`;
+const upbitRows = (candles) => candles.map(c => ({ date: c.candle_date_time_kst.slice(0, 10), r: num(c.trade_price, '종가') }));
+
+/** 이어서 더 받기: 먼저 받은 것으로 화면을 그린 뒤 더 오래된 날을 붙여요 (업비트는 10초에 한 번이라) */
+const MORE = {
+    async upbit(rows) {
+        const oldest = rows[0]?.date;
+        if (!oldest) return [];
+        // 가장 오래된 날 한국 시간 0시 = 전날 UTC 15시 → 그 전까지
+        const to = new Date(Date.parse(`${oldest}T00:00:00+09:00`)).toISOString().replace('.000', '');
+        return upbitRows(await upbitJson(upbitCandles(to)));
+    },
+};
+
+/** 날짜 순서로 합치기 (같은 날은 한 번만) */
+const mergeRows = (a, b) => [...a, ...b]
+    .filter((x, i, all) => all.findIndex(y => y.date === x.date) === i)
+    .sort((x, y) => x.date.localeCompare(y.date));
+
+/** 묶음별 상태 { status, rows, at, error, more } (모듈 변수라 화면을 떠났다 와도 남아요) */
 const groups = {};
 
 /**
@@ -75,14 +88,25 @@ export async function loadGroup(name, onDone, force = false) {
     groups[name] = { ...g, status: 'loading' };
     onDone();
     try {
-        const rows = await GROUPS[name]();
+        const rows = mergeRows(await GROUPS[name](), []);
         if (rows.length < 2) throw new Error('날짜별 값이 모자라요');
-        groups[name] = { status: 'ok', rows, at: Date.now() };
+        groups[name] = { status: 'ok', rows, at: Date.now(), more: MORE[name] ? 'loading' : null };
     } catch (err) {
         groups[name] = { ...groups[name], status: 'error', error: err.message };
         console.warn(`[시장 지표] ${name} 날짜별 값:`, err);
     }
     onDone();
+    // 먼저 받은 것을 보여준 뒤 더 오래된 날 이어 받기 (실패해도 받은 만큼은 그대로)
+    if (groups[name].status === 'ok' && MORE[name]) {
+        try {
+            const older = await MORE[name](groups[name].rows);
+            groups[name] = { ...groups[name], rows: mergeRows(older, groups[name].rows), more: null };
+        } catch (err) {
+            groups[name] = { ...groups[name], more: 'error' };
+            console.warn(`[시장 지표] ${name} 더 오래된 값:`, err);
+        }
+        onDone();
+    }
 }
 
 /* ---------- 항목 정의 ---------- */
@@ -274,7 +298,7 @@ export function detailHtml(key) {
     const g = groups[cfg.group];
     const all = seriesOf(cfg);
     if (!all.length) {
-        let msg = '불러오는 중…';
+        let msg = cfg.group === 'upbit' ? '불러오는 중… (업비트는 10초에 한 번만 받아줘서 조금 걸릴 수 있어요)' : '불러오는 중…';
         if (!isOnline()) msg = '인터넷에 연결되면 불러올게요';
         else if (g?.status === 'error') msg = `날짜별 값을 불러오지 못했어요 <button type="button" class="mini-btn" data-detail-retry data-needs-net>다시 시도</button>`;
         return `<p class="mk-msg ${g?.status === 'error' ? 'is-error' : ''}">${msg}</p>`;
@@ -297,7 +321,9 @@ export function detailHtml(key) {
         <div class="chart-wrap">${lineSvg(shown, cfg)}</div>
         ${dailyTable(all, cfg, v.rows)}
         ${v.rows < 30 && all.length > v.rows ? '<button type="button" class="text-btn mk-more" data-detail-more>30일까지 더 보기 ▾</button>' : ''}
-        <p class="mk-note">${cfg.note ?? '유럽중앙은행 기준가예요 (영업일마다 한 번).'}${g?.status === 'error' ? ' · 새 값을 못 받아서 지난 값이에요' : ''}</p>`;
+        <p class="mk-note">${cfg.note ?? '유럽중앙은행 기준가예요 (영업일마다 한 번).'}${g?.status === 'error' ? ' · 새 값을 못 받아서 지난 값이에요' : ''}${
+            g?.more === 'loading' && v.range === '1y' ? ' · 1년 치 중 더 오래된 날을 받는 중이에요 (10초쯤)' : ''}${
+            g?.more === 'error' && v.range === '1y' ? ' · 업비트는 최근 200일까지만 받았어요' : ''}</p>`;
 }
 
 /** series면 받아야 할 묶음 이름 (아니면 null) */

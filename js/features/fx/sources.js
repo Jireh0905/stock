@@ -169,10 +169,42 @@ export async function loadGold() {
 }
 
 /**
+ * 업비트 요청은 줄을 세워 보내요.
+ * 업비트는 브라우저(다른 사이트)에서 오는 요청을 약 10초에 한 번만 받아줘요. 더 자주 보내면 "429 too_many_requests"로 거절해요.
+ * 그래서 이전 요청과 10.5초 이상 띄우고, 거절당하면 10.5초 뒤 한 번 더 해 봐요 (모두 3번까지).
+ * MFC로 치면 공용 자원을 쓰는 작업을 큐에 넣고 하나씩 꺼내 처리하는 것과 같아요.
+ */
+const UPBIT_GAP = 10500;
+let upbitNext = 0;                    // 다음 요청을 보내도 되는 시각
+let upbitChain = Promise.resolve();   // 앞 요청이 끝나야 다음 요청이 시작돼요
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+export function upbitJson(url) {
+    const run = async () => {
+        let lastErr;
+        for (let attempt = 0; attempt < 3; attempt++) {
+            const wait = upbitNext - Date.now();
+            if (wait > 0) await sleep(wait);
+            upbitNext = Date.now() + UPBIT_GAP;
+            try {
+                return await getJson(url);
+            } catch (err) {
+                lastErr = err;
+                if (!/429/.test(err.message)) throw err;   // 막힌 게 아니면 바로 실패
+            }
+        }
+        throw new Error(`업비트가 요청을 잠시 막았어요 (10초에 한 번) · ${lastErr?.message ?? ''}`);
+    };
+    const p = upbitChain.then(run, run);
+    upbitChain = p.catch(() => {});
+    return p;
+}
+
+/**
  * 비트코인 원화 (업비트). 변화는 오늘 0시(한국 시간) 가격 대비예요.
  */
 export async function loadUpbit() {
-    const [t] = await getJson('https://api.upbit.com/v1/ticker?markets=KRW-BTC');
+    const [t] = await upbitJson('https://api.upbit.com/v1/ticker?markets=KRW-BTC');
     return {
         price: num(t?.trade_price, '비트코인'),
         prev: num(t.prev_closing_price, '전일 종가'),
