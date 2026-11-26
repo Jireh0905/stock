@@ -87,12 +87,32 @@ function waitingCard(stock, q) {
         </section>`;
 }
 
+/** 지금이 KRX 정규장 시간(한국 시간 9:00~15:30)인지. 휴장일은 따지지 않아요 (장이 닫혀 있으면 배지가 어차피 "장 마감") */
+function inRegularHours(now = new Date()) {
+    // 한국은 UTC+9 (서머타임 없음) → UTC 시각에 9시간을 더해 한국 시각의 분으로
+    const min = (now.getUTCHours() * 60 + now.getUTCMinutes() + 9 * 60) % (24 * 60);
+    return min >= 9 * 60 && min < 15 * 60 + 30;
+}
+
 /** 국내 제목: 이름 · 코드 · 시장 + 장중/장 마감 배지 */
 function krTitle(stock, d) {
-    // 정규장 밖(프리·애프터마켓, NXT)에서도 거래 중이면 그 이름으로
-    const live = d?.session && d.session !== '정규장' ? `${d.session} 거래 중` : '장중';
+    // 정규장 밖(프리·애프터마켓, NXT)에서도 거래 중이면 그 이름으로.
+    // NXT 정보가 없는데 정규장 밖에서 거래 중이면 KRX 시간외 거래예요 ("장중"이라 하면 정규장으로 헷갈려요)
+    let live = '장중';
+    if (d?.session && d.session !== '정규장') live = `${d.session} 거래 중`;
+    else if (!d?.session && !inRegularHours()) live = '시간외 거래 중';
     const badge = d ? (d.open ? `<span class="st-badge is-live">${live}</span>` : '<span class="st-badge">장 마감</span>') : '';
     return titleHtml(stock.name, `${stock.code} · ${MARKET_NAMES[stock.market] ?? ''}`, badge);
+}
+
+/**
+ * 프리마켓처럼 NXT 칸 값을 쓸 때 붙이는 안내 (naver.js가 tradedAt을 채워 줄 때만).
+ * 마지막 체결이 1분 넘게 지났으면 그 시각도 보여줘요 (NXT 프리마켓은 08:50에 끝나서 09:00까지 그 가격이 남아요).
+ */
+function nxtNote(d, time) {
+    if (d.tradedAt == null) return '';
+    const old = time - d.tradedAt > 60 * 1000 ? ` (마지막 체결 ${clockTime(new Date(d.tradedAt))})` : '';
+    return ` · NXT 가격·시가·고가·저가·거래량${old}`;
 }
 
 function priceCard(stock, q) {
@@ -105,7 +125,7 @@ function priceCard(stock, q) {
             ${krTitle(stock, d)}
             <div class="result-amount">${won(d.price)}<small>원</small></div>
             <span class="rate-pill pill-${tone(change)}">${arrow(change)} ${won(Math.abs(change))} (${sign(rate)}${fixed(Math.abs(rate))}%)</span>
-            <p class="st-time">${clockTime(new Date(q.time))} 기준${d.open ? ' · 거래 중에는 30초마다 새로 받아요' : ''}${stale}</p>
+            <p class="st-time">${clockTime(new Date(q.time))} 기준${nxtNote(d, q.time)}${d.open ? ' · 거래 중에는 30초마다 새로 받아요' : ''}${stale}</p>
             <ul class="rows rows-tight st-rows">
                 ${row('전일 종가', `${won(d.prev)}원`)}
                 ${d.dayOpen != null ? row('시가', `${won(d.dayOpen)}원`) : ''}

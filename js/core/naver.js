@@ -117,6 +117,7 @@ export async function loadItems(codes) {
         const sign = isDown(d.rf) ? -1 : 1;
         const price = num(d.nv);
         if (price == null) throw new Error(`${d.cd} 가격이 없어요`);
+        const nxt = nxtQuote(d);
         return {
             code: d.cd,
             name: d.nm,
@@ -134,7 +135,44 @@ export async function loadItems(codes) {
             open: d.ms === 'OPEN',
             // 거래 시간대: 정규장(9:00~15:30) 밖에도 대체거래소(NXT) 프리마켓·애프터마켓에서 가격이 움직여요
             session: SESSIONS[d.nxtOverMarketPriceInfo?.tradingSessionType] ?? null,
+            tradedAt: null,                                    // NXT 값을 쓸 때만: 마지막 체결 시각(ms)
+            ...nxt,                                            // 프리마켓이면 NXT 값으로 덮어써요
         };
     });
     return { time: json.result.time ?? Date.now(), items };
+}
+
+/** "173,100" · "-19,600" · "1.41" → 숫자 (못 읽으면 null) */
+const numText = (s) => {
+    if (typeof s !== 'string') return null;
+    const v = Number(s.replace(/,/g, ''));
+    return s.trim() && Number.isFinite(v) ? v : null;
+};
+
+/**
+ * 정규장 칸이 멈춰 있는 동안 NXT에서 거래 중이면, 덮어쓸 NXT 값을 돌려줘요 (아니면 빈 객체).
+ *
+ * 네이버는 시간대마다 값을 다르게 보내요 (2026-11 실제 응답으로 확인).
+ *   애프터마켓(15:30~20:00): ms 'OPEN', nv가 NXT 체결가를 따라가요 → 그대로 써도 돼요
+ *   프리마켓(08:00~08:50): ms 'PREOPEN', nv·시가·고가·저가는 어제 종가 그대로, 거래량 0 → NXT 칸을 써야 해요
+ * 그래서 "ms가 OPEN이 아닌데 NXT가 열려 있으면" NXT 칸(nxtOverMarketPriceInfo)으로 바꿔요.
+ * 전일 대비는 NXT 칸에 이미 부호가 붙어 있어요 (어제 KRX 종가 기준).
+ */
+function nxtQuote(d) {
+    const n = d.nxtOverMarketPriceInfo;
+    if (d.ms === 'OPEN' || n?.overMarketStatus !== 'OPEN') return {};
+    const price = numText(n.overPrice);
+    if (price == null) return {};
+    const change = numText(n.compareToPreviousClosePrice) ?? 0;
+    const tradedAt = Date.parse(n.localTradedAt);
+    return {
+        price,
+        change,
+        rate: numText(n.fluctuationsRatio) ?? 0,
+        prev: num(d.sv) ?? price - change,
+        dayOpen: numText(n.openPrice), high: numText(n.highPrice), low: numText(n.lowPrice),
+        volume: numText(n.accumulatedTradingVolumeRaw), amount: numText(n.accumulatedTradingValueRaw),
+        open: true,                                            // 거래 중 → 배지·30초 자동 갱신
+        tradedAt: Number.isFinite(tradedAt) ? tradedAt : null,
+    };
 }
